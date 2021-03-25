@@ -48,6 +48,11 @@ module T::Props
         @lazily_defined_methods ||= {}
       end
 
+      sig {returns(T::Hash[Symbol, T.untyped]).checked(:never)}
+      private def lazily_def2_methods
+        @lazily_def2_methods ||= {}
+      end
+
       sig {params(name: Symbol).void}
       private def eval_lazily_defined_method!(name)
         if !HasLazilySpecializedMethods.lazy_evaluation_enabled?
@@ -61,6 +66,18 @@ module T::Props
         cls.send(:private, name)
       end
 
+      sig {params(name: Symbol).void}
+      private def eval_lazily_def2_method!(name)
+        if !HasLazilySpecializedMethods.lazy_evaluation_enabled?
+          raise SourceEvaluationDisabled.new
+        end
+
+        lazily_def2_methods.fetch(name).call
+
+        cls = decorated_class
+        cls.send(:private, name)
+      end
+
       sig {params(name: Symbol, blk: T.proc.returns(String)).void}
       private def enqueue_lazy_method_definition!(name, &blk)
         lazily_defined_methods[name] = blk
@@ -68,6 +85,21 @@ module T::Props
         cls = decorated_class
         cls.send(:define_method, name) do |*args|
           self.class.decorator.send(:eval_lazily_defined_method!, name)
+          send(name, *args)
+        end
+        if cls.respond_to?(:ruby2_keywords, true)
+          cls.send(:ruby2_keywords, name)
+        end
+        cls.send(:private, name)
+      end
+
+      sig {params(name: Symbol, blk: T.untyped).void}
+      private def enqueue_lazy_method_def2!(name, &blk)
+        lazily_def2_methods[name] = blk
+
+        cls = decorated_class
+        cls.send(:define_method, name) do |*args|
+          self.class.decorator.send(:eval_lazily_def2_method!, name)
           send(name, *args)
         end
         if cls.respond_to?(:ruby2_keywords, true)

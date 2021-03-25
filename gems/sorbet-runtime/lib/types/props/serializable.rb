@@ -201,8 +201,14 @@ module T::Props::Serializable::DecoratorMethods
     rules[:serialized_form] = rules.fetch(:name, prop.to_s)
     res = super
     prop_by_serialized_forms[rules[:serialized_form]] = prop
-    enqueue_lazy_method_definition!(:__t_props_generated_serialize) {generate_serialize_source}
-    enqueue_lazy_method_definition!(:__t_props_generated_deserialize) {generate_deserialize_source}
+    interpreted = false
+    if interpreted
+      enqueue_lazy_method_definition!(:__t_props_generated_serialize) {generate_serialize_source}
+      enqueue_lazy_method_definition!(:__t_props_generated_deserialize) {generate_deserialize_source}
+    else
+      enqueue_lazy_method_def2!(:__t_props_generated_serialize) {generate_serialize2}
+      enqueue_lazy_method_def2!(:__t_props_generated_deserialize) {generate_deserialize2}
+    end
     res
   end
 
@@ -212,6 +218,18 @@ module T::Props::Serializable::DecoratorMethods
 
   private def generate_deserialize_source
     T::Props::Private::DeserializerGenerator.generate(
+      props,
+      props_with_defaults || {},
+    )
+  end
+
+  private def generate_serialize2
+    T::Props::Private::SerializerGenerator.generate2(decorated_class, props)
+  end
+
+  private def generate_deserialize2
+    T::Props::Private::DeserializerGenerator.generate2(
+      decorated_class,
       props,
       props_with_defaults || {},
     )
