@@ -15,6 +15,23 @@ module Opus::Types::Test
       def self.receive(*); end
     end
 
+    module Readable; end
+    module Writable
+      def write
+        T.bind(self, T.all(Readable, Writable))
+        true
+      end
+    end
+
+    class BadArticle
+      include Writable
+    end
+
+    class GoodArticle
+      include Writable
+      include Readable
+    end
+
     describe 'inline_type_error_handler' do
       describe 'when in default state' do
         it 'T.must raises an error' do
@@ -27,6 +44,25 @@ module Opus::Types::Test
           assert_raises(TypeError) do
             T.let(1, String)
           end
+        end
+
+        it 'T.bind raises an error if block is executing on the wrong type' do
+          block = -> {T.bind(self, String); upcase}
+
+          assert_raises(TypeError) do
+            123.instance_exec(&block)
+          end
+        end
+
+        it 'T.bind raises error if type constraints are not all satisfied' do
+          bad_article = BadArticle.new
+
+          assert_raises(TypeError) do
+            bad_article.write
+          end
+
+          good_article = GoodArticle.new
+          assert good_article.write
         end
       end
 
@@ -245,8 +281,6 @@ module Opus::Types::Test
       end
     end
 
-    # Tests for deserialization_error_handler are in serializable.rb.
-
     describe 'scalar_types' do
       describe 'when overridden' do
         it 'requires string values' do
@@ -291,6 +325,28 @@ module Opus::Types::Test
             T.let("foo", Integer)
           end
           assert_equal('T.let: Expected type Integer, got type String', e.message.split("\n").first)
+        end
+      end
+
+      describe 'enable_vm_prop_serde' do
+        it "fails if the VM doesn't support it" do
+          return if T::Configuration.can_enable_vm_prop_serde?
+
+          assert_raises(RuntimeError) do
+            T::Configuration.enable_vm_prop_serde
+          end
+        end
+
+        it "succeeds if the VM does support it" do
+          return unless T::Configuration.can_enable_vm_prop_serde?
+
+          was_enabled = T::Configuration.use_vm_prop_serde?
+
+          begin
+            T::Configuration.enable_vm_prop_serde
+          ensure
+            T::Configuration.disable_vm_prop_serde unless was_enabled
+          end
         end
       end
     end

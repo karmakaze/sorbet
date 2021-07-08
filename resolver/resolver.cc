@@ -107,10 +107,12 @@ private:
     struct ResolutionItem {
         shared_ptr<Nesting> scope;
         core::FileRef file;
-        ast::ConstantLit *out;
         bool resolutionFailed = false;
+        ast::ConstantLit *out;
 
         ResolutionItem() = default;
+        ResolutionItem(const shared_ptr<Nesting> &scope, core::FileRef file, ast::ConstantLit *lit)
+            : scope(scope), file(file), out(lit) {}
         ResolutionItem(ResolutionItem &&rhs) noexcept = default;
         ResolutionItem &operator=(ResolutionItem &&rhs) noexcept = default;
 
@@ -189,7 +191,7 @@ private:
     vector<ClassMethodsResolutionItem> todoClassMethods_;
     vector<RequireAncestorResolutionItem> todoRequiredAncestors_;
 
-    static core::SymbolRef resolveLhs(core::Context ctx, shared_ptr<Nesting> nesting, core::NameRef name) {
+    static core::SymbolRef resolveLhs(core::Context ctx, const shared_ptr<Nesting> &nesting, core::NameRef name) {
         Nesting *scope = nesting.get();
         while (scope != nullptr) {
             auto lookup = scope->scope.data(ctx)->findMember(ctx, name);
@@ -234,7 +236,7 @@ private:
         return !checker.seenUnresolved;
     }
 
-    static core::SymbolRef resolveConstant(core::Context ctx, shared_ptr<Nesting> nesting,
+    static core::SymbolRef resolveConstant(core::Context ctx, const shared_ptr<Nesting> &nesting,
                                            const ast::UnresolvedConstantLit &c, bool &resolutionFailed) {
         if (ast::isa_tree<ast::EmptyTree>(c.scope)) {
             core::SymbolRef result = resolveLhs(ctx, nesting, c.cnst);
@@ -2049,6 +2051,7 @@ public:
 
             switch (send.fun.rawId()) {
                 case core::Names::let().rawId():
+                case core::Names::bind().rawId():
                 case core::Names::uncheckedLet().rawId():
                 case core::Names::assertType().rawId():
                 case core::Names::cast().rawId(): {
@@ -2491,7 +2494,7 @@ private:
     }
 
     static void fillInInfoFromSig(core::MutableContext ctx, core::MethodRef method, core::LocOffsets exprLoc,
-                                  ParsedSig sig, bool isOverloaded, const ast::MethodDef &mdef) {
+                                  ParsedSig &sig, bool isOverloaded, const ast::MethodDef &mdef) {
         ENFORCE(isOverloaded || mdef.symbol == method);
         ENFORCE(isOverloaded || method.data(ctx)->arguments().size() == mdef.args.size());
 
@@ -2541,12 +2544,13 @@ private:
         auto methodInfo = method.data(ctx);
 
         // Is this a signature for a method defined with argument forwarding syntax?
-        if (methodInfo->arguments().size() == 3) {
-            // To match, the definition must have been desugared in exaclty 3 parameters named
+        if (methodInfo->arguments().size() >= 3) {
+            // To match, the definition must have been desugared with at least 3 parameters named
             // `<fwd-args>`, `<fwd-kwargs>` and `<fwd-block>`
-            auto l1 = getArgLocal(ctx, methodInfo->arguments()[0], mdef, 0, isOverloaded)->localVariable;
-            auto l2 = getArgLocal(ctx, methodInfo->arguments()[1], mdef, 1, isOverloaded)->localVariable;
-            auto l3 = getArgLocal(ctx, methodInfo->arguments()[2], mdef, 2, isOverloaded)->localVariable;
+            auto len = methodInfo->arguments().size();
+            auto l1 = getArgLocal(ctx, methodInfo->arguments()[len - 3], mdef, len - 3, isOverloaded)->localVariable;
+            auto l2 = getArgLocal(ctx, methodInfo->arguments()[len - 2], mdef, len - 2, isOverloaded)->localVariable;
+            auto l3 = getArgLocal(ctx, methodInfo->arguments()[len - 1], mdef, len - 1, isOverloaded)->localVariable;
             if (l1._name == core::Names::fwdArgs() && l2._name == core::Names::fwdKwargs() &&
                 l3._name == core::Names::fwdBlock()) {
                 if (auto e = ctx.beginError(exprLoc, core::errors::Resolver::InvalidMethodSignature)) {
@@ -2560,10 +2564,7 @@ private:
         }
 
         // Get the parameters order from the signature
-        vector<ParsedSig::ArgSpec> sigParams;
-        for (auto &spec : sig.argTypes) {
-            sigParams.push_back(spec);
-        }
+        vector<ParsedSig::ArgSpec> sigParams(sig.argTypes);
 
         vector<ast::Local const *> defParams; // Parameters order from the method declaration
         bool seenOptional = false;
@@ -2595,7 +2596,7 @@ private:
 
             if (spec != sig.argTypes.end()) {
                 ENFORCE(spec->type != nullptr);
-                arg.type = spec->type;
+                arg.type = std::move(spec->type);
                 arg.loc = spec->loc;
                 arg.rebind = spec->rebind;
                 sig.argTypes.erase(spec);
@@ -2624,7 +2625,7 @@ private:
             }
         }
 
-        for (auto spec : sig.argTypes) {
+        for (const auto &spec : sig.argTypes) {
             if (auto e = ctx.state.beginError(spec.loc, core::errors::Resolver::InvalidMethodSignature)) {
                 e.setHeader("Unknown argument name `{}`", spec.name.show(ctx));
             }
@@ -2633,8 +2634,8 @@ private:
         // Check params ordering match between signature and definition
         if (sig.argTypes.empty()) {
             int j = 0;
-            for (auto spec : sigParams) {
-                auto param = defParams[j];
+            for (const auto &spec : sigParams) {
+                auto *param = defParams[j];
                 auto sname = spec.name;
                 auto dname = param->localVariable._name;
                 // TODO(jvilk): Do we need to check .show? Typically NameRef equality is equal to string equality.
@@ -2648,6 +2649,36 @@ private:
                 j++;
             }
         }
+
+        // Later passes are going to separate the sig and the method definition.
+        // Record some information in the sig call itself so that we can reassociate
+        // them later.
+        //
+        // Note that the sig still needs to send to a method called "sig" so that
+        // code completion in LSP works.  We change the receiver, below, so that
+        // sigs that don't pass through here still reflect the user's intent.
+        auto *send = sig.origSend;
+        auto &origArgs = send->args;
+        auto *self = ast::cast_tree<ast::Local>(send->args[0]);
+        if (self == nullptr) {
+            return;
+        }
+
+        // We distinguish "user-written" sends by checking for self.
+        // T::Sig::WithoutRuntime.sig wouldn't have any runtime effect that we need
+        // to record later.
+        if (self->localVariable != core::LocalVariable::selfVariable()) {
+            return;
+        }
+
+        auto *cnst = ast::cast_tree<ast::ConstantLit>(send->recv);
+        ENFORCE(cnst != nullptr, "sig send receiver must be a ConstantLit if we got a ParsedSig from the send");
+
+        cnst->symbol = core::Symbols::Sorbet_Private_Static_ResolvedSig();
+
+        origArgs.emplace_back(mdef.flags.isSelfMethod ? ast::MK::True(send->loc) : ast::MK::False(send->loc));
+        origArgs.emplace_back(ast::MK::Symbol(send->loc, method.data(ctx)->name));
+        send->numPosArgs += 2;
     }
 
     // Force errors from any signatures that didn't attach to methods.
@@ -2833,7 +2864,7 @@ private:
     }
 
 public:
-    static void resolveMultiSignatureJob(core::MutableContext ctx, const ResolveMultiSignatureJob &job) {
+    static void resolveMultiSignatureJob(core::MutableContext ctx, ResolveMultiSignatureJob &job) {
         auto &sigs = job.sigs;
         auto &mdef = *job.mdef;
         ENFORCE_NO_TIMER(sigs.size() > 1);
@@ -2860,15 +2891,15 @@ public:
             } else {
                 overloadSym = mdef.symbol;
             }
-            fillInInfoFromSig(ctx, overloadSym, sig.loc, move(sig.sig), isOverloaded, mdef);
+            fillInInfoFromSig(ctx, overloadSym, sig.loc, sig.sig, isOverloaded, mdef);
         }
         handleAbstractMethod(ctx, mdef);
     }
-    static void resolveSignatureJob(core::MutableContext ctx, const ResolveSignatureJob &job) {
+    static void resolveSignatureJob(core::MutableContext ctx, ResolveSignatureJob &job) {
         prodCounterInc("types.sig.count");
         auto &mdef = *job.mdef;
         bool isOverloaded = false;
-        fillInInfoFromSig(ctx, mdef.symbol, job.loc, move(job.sig), isOverloaded, mdef);
+        fillInInfoFromSig(ctx, mdef.symbol, job.loc, job.sig, isOverloaded, mdef);
         handleAbstractMethod(ctx, mdef);
     }
 

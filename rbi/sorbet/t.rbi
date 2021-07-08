@@ -30,6 +30,9 @@ module T
   def self.let(value, type, checked: true); end
 
   sig {params(value: T.untyped, type: T.untyped, checked: T::Boolean).returns(BasicObject)}
+  def self.bind(value, type, checked: true); end
+
+  sig {params(value: T.untyped, type: T.untyped, checked: T::Boolean).returns(BasicObject)}
   def self.assert_type!(value, type, checked: true); end
 
   sig {params(value: T.untyped, type: T.untyped, checked: T::Boolean).returns(BasicObject)}
@@ -142,6 +145,10 @@ module T::Configuration
   def self.exclude_value_in_type_errors; end
   sig {void}
   def self.include_value_in_type_errors; end
+  def self.can_enable_vm_prop_serde?; end
+  def self.use_vm_prop_serde?; end
+  def self.enable_vm_prop_serde; end
+  def self.disable_vm_prop_serde; end
   def self.hard_assert_handler(str, extra); end
   def self.hard_assert_handler=(value); end
   def self.inline_type_error_handler(error); end
@@ -166,18 +173,6 @@ module T::Configuration
   def self.redaction_handler; end
   def self.class_owner_finder=(handler); end
   def self.class_owner_finder; end
-end
-
-module T::Profile
-  def self.reset; end
-  def self.typecheck_count_estimate; end
-  def self.typecheck_duration; end
-  def self.typecheck_duration=(arg0); end
-  def self.typecheck_duration_estimate; end
-  def self.typecheck_sample_attempts; end
-  def self.typecheck_sample_attempts=(arg0); end
-  def self.typecheck_samples; end
-  def self.typecheck_samples=(arg0); end
 end
 
 module T::Utils

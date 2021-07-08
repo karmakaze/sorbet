@@ -809,17 +809,11 @@ class Pathname < Object
   sig do
     params(
         ignore_error: T::Boolean,
-        blk: T.proc.params(arg0: Pathname).returns(BasicObject),
+        blk: T.nilable(T.proc.params(arg0: Pathname).void),
     )
-    .returns(T.untyped)
+    .returns(T.nilable(T::Enumerator[Pathname]))
   end
-  sig do
-    params(
-        ignore_error: T::Boolean,
-    )
-    .returns(T::Enumerator[Pathname])
-  end
-  def find(ignore_error, &blk); end
+  def find(ignore_error: true, &blk); end
 
   # Return `true` if the receiver matches the given pattern.
   #
@@ -925,7 +919,7 @@ class Pathname < Object
   # [`Dir.mkdir`](https://docs.ruby-lang.org/en/2.7.0/Dir.html#method-c-mkdir).
   sig do
     params(
-        p1: String,
+        p1: Integer,
     )
     .returns(Integer)
   end

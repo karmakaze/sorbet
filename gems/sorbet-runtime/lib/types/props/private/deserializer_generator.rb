@@ -57,8 +57,7 @@ module T::Props
               begin
                 #{transformation}
               rescue NoMethodError => e
-                T::Configuration.deserialization_error_handler(
-                  self.class,
+                raise_deserialization_error(
                   #{prop.inspect},
                   val,
                   e,

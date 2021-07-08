@@ -57,13 +57,12 @@ struct builder {
 	ForeignPtr(*float_)(SelfPtr builder, const token* tok);
 	ForeignPtr(*floatComplex)(SelfPtr builder, const token* tok);
 	ForeignPtr(*for_)(SelfPtr builder, const token* for_, ForeignPtr iterator, const token* in_, ForeignPtr iteratee, const token* do_, ForeignPtr body, const token* end);
-	ForeignPtr(*forward_args)(SelfPtr builder, const token* begin, const token* dots, const token* end);
+	ForeignPtr(*forward_arg)(SelfPtr builder, const token* begin, const token* dots, const token* end);
 	ForeignPtr(*forwarded_args)(SelfPtr builder, const token* dots);
 	ForeignPtr(*gvar)(SelfPtr builder, const token* tok);
 	ForeignPtr(*hash_pattern)(SelfPtr builder, const token* begin, const node_list* kwargs, const token* end);
 	ForeignPtr(*ident)(SelfPtr builder, const token* tok);
 	ForeignPtr(*if_guard)(SelfPtr builder, const token* tok, ForeignPtr ifBody);
-	ForeignPtr(*in_match)(SelfPtr builder, ForeignPtr lhs, const token* tok, ForeignPtr rhs);
 	ForeignPtr(*in_pattern)(SelfPtr builders, const token* tok, ForeignPtr pattern, ForeignPtr guard, const token* thenToken, ForeignPtr body);
 	ForeignPtr(*index)(SelfPtr builder, ForeignPtr receiver, const token* lbrack, const node_list* indexes, const token* rbrack);
 	ForeignPtr(*indexAsgn)(SelfPtr builder, ForeignPtr receiver, const token* lbrack, const node_list* indexes, const token* rbrack);
@@ -93,6 +92,8 @@ struct builder {
 	ForeignPtr(*match_alt)(SelfPtr builder, ForeignPtr left, const token* pipe, ForeignPtr right);
 	ForeignPtr(*match_as)(SelfPtr builder, ForeignPtr value, const token* assoc, ForeignPtr as);
 	ForeignPtr(*match_label)(SelfPtr builder, ForeignPtr label);
+	ForeignPtr(*match_pattern)(SelfPtr builder, ForeignPtr lhs, const token* tok, ForeignPtr rhs);
+	ForeignPtr(*match_pattern_p)(SelfPtr builder, ForeignPtr lhs, const token* tok, ForeignPtr rhs);
 	ForeignPtr(*match_nil_pattern)(SelfPtr builder, const token* dstar, const token* nil);
 	ForeignPtr(*match_op)(SelfPtr builder, ForeignPtr receiver, const token* oper, ForeignPtr arg);
 	ForeignPtr(*match_pair)(SelfPtr builder, ForeignPtr label, ForeignPtr value);

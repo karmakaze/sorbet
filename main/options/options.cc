@@ -320,6 +320,10 @@ buildOptions(const vector<pipeline::semantic_extension::SemanticExtensionProvide
         "End users should prefer to use `--enable-all-beta-lsp-features`, instead.)");
     options.add_options("advanced")("enable-all-beta-lsp-features",
                                     "Enable (expected-to-be-non-crashy) early-access LSP features.");
+    options.add_options("advanced")("lsp-error-cap",
+                                    "Caps the maximum number of errors that LSP reports to the editor. Can prevent "
+                                    "editor slowdown triggered by large error lists. A cap of 0 means 'no cap'.",
+                                    cxxopts::value<int>()->default_value(to_string(empty.lspErrorCap)), "cap");
     options.add_options("advanced")(
         "ignore",
         "Ignores input files that contain the given string in their paths (relative to the input path passed to "
@@ -586,6 +590,11 @@ bool extractAutoloaderConfig(cxxopts::ParseResult &raw, Options &opts, shared_pt
     cfg.registryModule = raw["autogen-registry-module"].as<string>();
     cfg.rootDir = stripTrailingSlashes(raw["autogen-autoloader-root"].as<string>());
     cfg.packagedAutoloader = raw["autogen-autoloader-packaged"].as<bool>();
+    if (cfg.packagedAutoloader) {
+        // TODO(ngroman) Multi-package autoloader runtime support
+        logger->error("Flag --autogen-autoloader-packaged is currently not supported.");
+        throw EarlyReturnWithCode(1);
+    }
     cfg.rootObject = raw["autogen-root-object"].as<string>();
     return true;
 }
@@ -696,6 +705,8 @@ void readOptions(Options &opts,
                 opts.lspDirsMissingFromClient.push_back(pNormalized);
             }
         }
+
+        opts.lspErrorCap = raw["lsp-error-cap"].as<int>();
 
         opts.cacheDir = raw["cache-dir"].as<string>();
         if (!extractPrinters(raw, opts, logger)) {

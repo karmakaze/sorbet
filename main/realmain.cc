@@ -9,6 +9,7 @@
 #include "common/web_tracer_framework/tracing.h"
 #include "main/autogen/autogen.h"
 #include "main/autogen/autoloader.h"
+#include "main/autogen/crc_builder.h"
 #include "main/autogen/packages.h"
 #include "main/autogen/subclasses.h"
 #include "main/lsp/LSPInput.h"
@@ -214,11 +215,13 @@ void runAutogen(const core::GlobalState &gs, options::Options &opts, const autog
 
     auto resultq = make_shared<BlockingBoundedQueue<AutogenResult>>(indexed.size());
     auto fileq = make_shared<ConcurrentBoundedQueue<int>>(indexed.size());
+    vector<AutogenResult::Serialized> merged(indexed.size());
     for (int i = 0; i < indexed.size(); ++i) {
         fileq->push(move(i), 1);
     }
+    auto crcBuilder = autogen::CRCBuilder::create();
 
-    workers.multiplexJob("runAutogen", [&gs, &opts, &indexed, &autoloaderCfg, fileq, resultq]() {
+    workers.multiplexJob("runAutogen", [&gs, &opts, &indexed, &autoloaderCfg, crcBuilder, fileq, resultq]() {
         AutogenResult out;
         int n = 0;
         {
@@ -233,7 +236,7 @@ void runAutogen(const core::GlobalState &gs, options::Options &opts, const autog
                 }
 
                 core::Context ctx(gs, core::Symbols::root(), tree.file);
-                auto pf = autogen::Autogen::generate(ctx, move(tree));
+                auto pf = autogen::Autogen::generate(ctx, move(tree), *crcBuilder);
                 tree = move(pf.tree);
 
                 AutogenResult::Serialized serialized;
@@ -270,27 +273,30 @@ void runAutogen(const core::GlobalState &gs, options::Options &opts, const autog
 
     autogen::DefTree root;
     AutogenResult out;
-    vector<pair<int, AutogenResult::Serialized>> merged;
-    for (auto res = resultq->wait_pop_timed(out, chrono::seconds{1}, *logger); !res.done();
-         res = resultq->wait_pop_timed(out, chrono::seconds{1}, *logger)) {
+    for (auto res = resultq->wait_pop_timed(out, WorkerPool::BLOCK_INTERVAL(), *logger); !res.done();
+         res = resultq->wait_pop_timed(out, WorkerPool::BLOCK_INTERVAL(), *logger)) {
         if (!res.gotItem()) {
             continue;
         }
         counterConsume(move(out.counters));
-        merged.insert(merged.end(), make_move_iterator(out.prints.begin()), make_move_iterator(out.prints.end()));
+        for (auto &print : out.prints) {
+            merged[print.first] = move(print.second);
+        }
         if (opts.print.AutogenAutoloader.enabled) {
             Timer timeit(logger, "autogenAutoloaderDefTreeMerge");
             root = autogen::DefTreeBuilder::merge(gs, move(root), move(*out.defTree));
         }
     }
-    fast_sort(merged, [](const auto &lhs, const auto &rhs) -> bool { return lhs.first < rhs.first; });
 
-    for (auto &elem : merged) {
-        if (opts.print.Autogen.enabled) {
-            opts.print.Autogen.print(elem.second.strval);
-        }
-        if (opts.print.AutogenMsgPack.enabled) {
-            opts.print.AutogenMsgPack.print(elem.second.msgpack);
+    {
+        Timer timeit(logger, "autogenDependencyDBPrint");
+        for (auto &elem : merged) {
+            if (opts.print.Autogen.enabled) {
+                opts.print.Autogen.print(elem.strval);
+            }
+            if (opts.print.AutogenMsgPack.enabled) {
+                opts.print.AutogenMsgPack.print(elem.msgpack);
+            }
         }
     }
     if (opts.print.AutogenAutoloader.enabled) {
@@ -300,7 +306,8 @@ void runAutogen(const core::GlobalState &gs, options::Options &opts, const autog
         }
         {
             Timer timeit(logger, "autogenAutoloaderWrite");
-            autogen::AutoloadWriter::writeAutoloads(gs, autoloaderCfg, opts.print.AutogenAutoloader.outputPath, root);
+            autogen::AutoloadWriter::writeAutoloads(gs, workers, autoloaderCfg, opts.print.AutogenAutoloader.outputPath,
+                                                    root);
         }
     }
 
@@ -308,7 +315,7 @@ void runAutogen(const core::GlobalState &gs, options::Options &opts, const autog
         Timer timeit(logger, "autogenClasslistPrint");
         vector<string> mergedClasslist;
         for (auto &el : merged) {
-            auto &v = el.second.classlist;
+            auto &v = el.classlist;
             mergedClasslist.insert(mergedClasslist.end(), make_move_iterator(v.begin()), make_move_iterator(v.end()));
         }
         fast_sort(mergedClasslist);
@@ -321,12 +328,12 @@ void runAutogen(const core::GlobalState &gs, options::Options &opts, const autog
         // Merge the {Parent: Set{Child1, Child2}} maps from each thread
         autogen::Subclasses::Map childMap;
         for (const auto &el : merged) {
-            if (!el.second.subclasses) {
+            if (!el.subclasses) {
                 // File doesn't define any Child < Parent relationships
                 continue;
             }
 
-            for (const auto &[parentName, children] : *el.second.subclasses) {
+            for (const auto &[parentName, children] : *el.subclasses) {
                 if (!parentName.empty()) {
                     childMap[parentName].entries.insert(children.entries.begin(), children.entries.end());
                     childMap[parentName].classKind = children.classKind;
@@ -342,6 +349,7 @@ void runAutogen(const core::GlobalState &gs, options::Options &opts, const autog
     }
 
     if (opts.autoloaderConfig.packagedAutoloader) {
+        Timer timeit(logger, "autogenPackageAutoloads");
         autogen::AutoloadWriter::writePackageAutoloads(gs, autoloaderCfg, opts.print.AutogenAutoloader.outputPath,
                                                        packageq);
     }

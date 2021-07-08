@@ -73,6 +73,37 @@ module T::Configuration
     @include_value_in_type_errors = true
   end
 
+  # Whether VM-defined prop serialization/deserialization routines can be enabled.
+  #
+  # @return [T::Boolean]
+  def self.can_enable_vm_prop_serde?
+    T::Props::Private::DeserializerGenerator.respond_to?(:generate2)
+  end
+
+  # Whether to use VM-defined prop serialization/deserialization routines.
+  #
+  # The default is to use runtime codegen inside sorbet-runtime itself.
+  #
+  # @return [T::Boolean]
+  def self.use_vm_prop_serde?
+    @use_vm_prop_serde || false
+  end
+
+  # Enable using VM-defined prop serialization/deserialization routines.
+  #
+  # This method is likely to break things outside of Stripe's systems.
+  def self.enable_vm_prop_serde
+    if !can_enable_vm_prop_serde?
+      hard_assert_handler('Ruby VM is not setup to use VM-defined prop serde')
+    end
+    @use_vm_prop_serde = true
+  end
+
+  # Disable using VM-defined prop serialization/deserialization routines.
+  def self.disable_vm_prop_serde
+    @use_vm_prop_serde = false
+  end
+
   # Configure the default checked level for a sig with no explicit `.checked`
   # builder. When unset, the default checked level is `:always`.
   #
@@ -287,51 +318,6 @@ module T::Configuration
       @log_info_handler.call(str, extra)
     else
       log_info_handler_default(str, extra)
-    end
-  end
-
-  # Set a handler for deserialization errors
-  #
-  # These generally shouldn't stop execution of the program, but rather inform
-  # some party of the error to action on later.
-  #
-  # @param [Lambda, Proc, Object, nil] value Proc that handles the error
-  #   report (pass nil to reset to default behavior)
-  #
-  # Parameters passed to value.call:
-  #
-  # @param [Class] klass The class of the top-level object being deserialized
-  # @param [String] prop_name The name of the prop being deserialized
-  # @param [Object] value The prop value being deserialized
-  # @param [Error] orig_error The original error raised during deserialization
-  #
-  # @example
-  #   T::Configuration.deserialization_error_handler = lambda do |klass, prop_name, value, orig_error}
-  #     puts "Error deserializing #{prop_name} on #{klass}: #{orig_error.message}
-  #   end
-  def self.deserialization_error_handler=(value)
-    validate_lambda_given!(value)
-    @deserialization_error_handler = value
-  end
-
-  private_class_method def self.deserialization_error_handler_default(klass, prop_name, value, orig_error)
-    soft_assert_handler(
-      'Deserialization error (probably unexpected stored type)',
-      storytime: {
-        klass: klass,
-        prop: prop_name,
-        value: value,
-        error: orig_error.message,
-        notify: 'djudd'
-      }
-    )
-  end
-
-  def self.deserialization_error_handler(klass, prop_name, value, orig_error)
-    if @deserialization_error_handler
-      @deserialization_error_handler.call(klass, prop_name, value, orig_error)
-    else
-      deserialization_error_handler_default(klass, prop_name, value, orig_error)
     end
   end
 

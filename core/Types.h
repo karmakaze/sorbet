@@ -64,7 +64,7 @@ public:
 };
 CheckSize(ArgInfo, 48, 8);
 
-template <class T, class... Args> TypePtr make_type(Args &&... args) {
+template <class T, class... Args> TypePtr make_type(Args &&...args) {
     static_assert(!TypePtr::TypeToIsInlined<T>::value, "Inlined types must specialize `make_type` for each combination "
                                                        "of argument types; is one specialization missing?");
     return TypePtr(TypePtr::TypeToTag<T>::value, new T(std::forward<Args>(args)...));
@@ -892,7 +892,7 @@ public:
     const core::SymbolRef scope;
     const std::vector<core::NameRef> names;
     UnresolvedClassType(SymbolRef scope, std::vector<core::NameRef> names)
-        : ClassType(core::Symbols::untyped()), scope(scope), names(names){};
+        : ClassType(core::Symbols::untyped()), scope(scope), names(std::move(names)){};
     std::string toStringWithTabs(const GlobalState &gs, int tabs = 0) const;
     std::string show(const GlobalState &gs) const;
     u4 hash(const GlobalState &gs) const;

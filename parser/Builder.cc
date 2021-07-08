@@ -1,4 +1,5 @@
 #include "parser/Builder.h"
+#include "absl/strings/str_split.h"
 #include "common/common.h"
 #include "common/typecase.h"
 #include "core/Names.h"
@@ -30,37 +31,42 @@ namespace sorbet::parser {
 
 string Dedenter::dedent(string_view str) {
     string out;
-    for (auto ch : str) {
-        if (spacesToRemove > 0) {
-            switch (ch) {
-                case ' ':
-                    spacesToRemove--;
-                    break;
-                case '\n':
-                    spacesToRemove = dedentLevel;
-                    break;
-                case '\t': {
-                    int indent = dedentLevel - spacesToRemove;
-                    int delta = 8 - indent % 8;
-                    if (delta > spacesToRemove) {
-                        // Prevent against underflow on unsigned integer.
-                        // In this case, the tab doesn't get chomped.
+
+    auto lines = absl::StrSplit(str, "\\\n");
+
+    for (auto line : lines) {
+        spacesToRemove = dedentLevel;
+
+        for (auto ch : line) {
+            if (spacesToRemove > 0) {
+                switch (ch) {
+                    case ' ':
+                        spacesToRemove--;
+                        break;
+                    case '\t': {
+                        int indent = dedentLevel - spacesToRemove;
+                        int delta = 8 - indent % 8;
+                        if (delta > spacesToRemove) {
+                            // Prevent against underflow on unsigned integer.
+                            // In this case, the tab doesn't get chomped.
+                            out.push_back(ch);
+                            spacesToRemove = 0;
+                        } else {
+                            spacesToRemove -= delta;
+                        }
+                        break;
+                    }
+                    default:
+                        // String does not have anymore whitespace left to remove.
                         out.push_back(ch);
                         spacesToRemove = 0;
-                    } else {
-                        spacesToRemove -= delta;
-                    }
-                    break;
                 }
-                default:
-                    // String does not have anymore whitespace left to remove.
-                    out.push_back(ch);
-                    spacesToRemove = 0;
+            } else {
+                out.push_back(ch);
             }
-        } else {
-            out.push_back(ch);
         }
     }
+
     if (!out.empty() && out.back() == '\n') {
         spacesToRemove = dedentLevel;
     }
@@ -203,7 +209,10 @@ public:
     }
 
     unique_ptr<Node> arg(const token *name) {
-        return make_unique<Arg>(tokLoc(name), gs_.enterNameUTF8(name->string()));
+        core::LocOffsets loc = tokLoc(name);
+        checkReservedForNumberedParameters(name->string(), loc);
+
+        return make_unique<Arg>(loc, gs_.enterNameUTF8(name->string()));
     }
 
     unique_ptr<Node> args(const token *begin, sorbet::parser::NodeVec args, const token *end, bool check_args) {
@@ -267,9 +276,8 @@ public:
     unique_ptr<Node> assignable(unique_ptr<Node> node) {
         if (auto *id = parser::cast_node<Ident>(node.get())) {
             auto name_str = id->name.show(gs_);
-            if (isNumberedParameterName(name_str) && driver_->lex.context.inDynamicBlock()) {
-                error(ruby_parser::dclass::CantAssignToNumparam, id->loc, name_str);
-            }
+            checkReservedForNumberedParameters(name_str, id->loc);
+
             driver_->lex.declare(name_str);
             return make_unique<LVarLhs>(id->loc, id->name);
         } else if (auto *iv = parser::cast_node<IVar>(node.get())) {
@@ -491,10 +499,12 @@ public:
         if (name != nullptr) {
             loc = tokLoc(name);
             nm = gs_.enterNameUTF8(name->string());
+            checkReservedForNumberedParameters(name->string(), loc);
         } else {
             loc = tokLoc(amper);
             nm = gs_.freshNameUnique(core::UniqueNameKind::Parser, core::Names::ampersand(), ++uniqueCounter_);
         }
+
         return make_unique<Blockarg>(loc, nm);
     }
 
@@ -639,10 +649,6 @@ public:
     }
 
     unique_ptr<Node> dedentString(unique_ptr<Node> node, size_t dedentLevel) {
-        if (dedentLevel == 0) {
-            return node;
-        }
-
         Dedenter dedenter(dedentLevel);
         unique_ptr<Node> result;
 
@@ -655,25 +661,37 @@ public:
             },
 
             [&](DString *d) {
+                sorbet::parser::NodeVec parts;
                 for (auto &p : d->nodes) {
                     if (auto *s = parser::cast_node<String>(p.get())) {
                         std::string dedented = dedenter.dedent(s->val.shortName(gs_));
+                        if (dedented.empty()) {
+                            continue;
+                        }
                         unique_ptr<Node> newstr = make_unique<String>(s->loc, gs_.enterNameUTF8(dedented));
-                        p.swap(newstr);
+                        parts.emplace_back(std::move(newstr));
+                    } else {
+                        parts.emplace_back(std::move(p));
                     }
                 }
-                result = std::move(node);
+                result = make_unique<DString>(d->loc, std::move(parts));
             },
 
             [&](XString *d) {
+                sorbet::parser::NodeVec parts;
                 for (auto &p : d->nodes) {
                     if (auto *s = parser::cast_node<String>(p.get())) {
                         std::string dedented = dedenter.dedent(s->val.shortName(gs_));
+                        if (dedented.empty()) {
+                            continue;
+                        }
                         unique_ptr<Node> newstr = make_unique<String>(s->loc, gs_.enterNameUTF8(dedented));
-                        p.swap(newstr);
+                        parts.emplace_back(std::move(newstr));
+                    } else {
+                        parts.emplace_back(std::move(p));
                     }
                 }
-                result = std::move(node);
+                result = make_unique<XString>(d->loc, std::move(parts));
             },
 
             [&](Node *n) { Exception::raise("Unexpected dedent node: {}", n->nodeName()); });
@@ -693,6 +711,8 @@ public:
                                const token *end) {
         core::LocOffsets declLoc = tokLoc(def, name).join(maybe_loc(args));
         core::LocOffsets loc = tokLoc(def, end);
+
+        checkReservedForNumberedParameters(name->string(), declLoc);
 
         return make_unique<DefMethod>(loc, declLoc, gs_.enterNameUTF8(name->string()), std::move(args),
                                       std::move(body));
@@ -719,6 +739,7 @@ public:
         if (isLiteralNode(*(definee.get()))) {
             error(ruby_parser::dclass::SingletonLiteral, definee->loc);
         }
+        checkReservedForNumberedParameters(name->string(), declLoc);
 
         return make_unique<DefS>(loc, declLoc, std::move(definee), gs_.enterNameUTF8(name->string()), std::move(args),
                                  std::move(body));
@@ -754,8 +775,8 @@ public:
                                 std::move(body));
     }
 
-    unique_ptr<Node> forward_args(const token *begin, const token *dots, const token *end) {
-        return make_unique<ForwardArgs>(tokLoc(begin).join(tokLoc(dots)).join(tokLoc(end)));
+    unique_ptr<Node> forward_arg(const token *begin, const token *dots, const token *end) {
+        return make_unique<ForwardArg>(tokLoc(dots));
     }
 
     unique_ptr<Node> forwarded_args(const token *dots) {
@@ -788,10 +809,6 @@ public:
 
     unique_ptr<Node> if_guard(const token *tok, unique_ptr<Node> if_body) {
         return make_unique<IfGuard>(tokLoc(tok).join(if_body->loc), std::move(if_body));
-    }
-
-    unique_ptr<Node> in_match(unique_ptr<Node> lhs, const token *tok, unique_ptr<Node> rhs) {
-        return make_unique<InMatch>(lhs->loc.join(rhs->loc), std::move(lhs), std::move(rhs));
     }
 
     unique_ptr<Node> in_pattern(const token *inTok, unique_ptr<Node> pattern, unique_ptr<Node> guard,
@@ -873,11 +890,17 @@ public:
     }
 
     unique_ptr<Node> kwarg(const token *name) {
-        return make_unique<Kwarg>(tokLoc(name), gs_.enterNameUTF8(name->string()));
+        core::LocOffsets loc = tokLoc(name);
+        checkReservedForNumberedParameters(name->string(), loc);
+
+        return make_unique<Kwarg>(loc, gs_.enterNameUTF8(name->string()));
     }
 
     unique_ptr<Node> kwoptarg(const token *name, unique_ptr<Node> value) {
-        return make_unique<Kwoptarg>(tokLoc(name).join(value->loc), gs_.enterNameUTF8(name->string()), tokLoc(name),
+        core::LocOffsets loc = tokLoc(name);
+        checkReservedForNumberedParameters(name->string(), loc);
+
+        return make_unique<Kwoptarg>(loc.join(value->loc), gs_.enterNameUTF8(name->string()), tokLoc(name),
                                      std::move(value));
     }
 
@@ -892,9 +915,11 @@ public:
         if (name != nullptr) {
             loc = loc.join(tokLoc(name));
             nm = gs_.enterNameUTF8(name->string());
+            checkReservedForNumberedParameters(name->string(), loc);
         } else {
             nm = gs_.freshNameUnique(core::UniqueNameKind::Parser, core::Names::starStar(), ++uniqueCounter_);
         }
+
         return make_unique<Kwrestarg>(loc, nm);
     }
 
@@ -972,6 +997,14 @@ public:
         sorbet::parser::NodeVec args;
         args.emplace_back(std::move(arg));
         return make_unique<Send>(loc, std::move(receiver), gs_.enterNameUTF8(oper->string()), std::move(args));
+    }
+
+    unique_ptr<Node> match_pattern(unique_ptr<Node> lhs, const token *tok, unique_ptr<Node> rhs) {
+        return make_unique<MatchPattern>(lhs->loc.join(rhs->loc), std::move(lhs), std::move(rhs));
+    }
+
+    unique_ptr<Node> match_pattern_p(unique_ptr<Node> lhs, const token *tok, unique_ptr<Node> rhs) {
+        return make_unique<MatchPatternP>(lhs->loc.join(rhs->loc), std::move(lhs), std::move(rhs));
     }
 
     unique_ptr<Node> match_nil_pattern(const token *dstar, const token *nil) {
@@ -1107,7 +1140,10 @@ public:
     }
 
     unique_ptr<Node> optarg_(const token *name, const token *eql, unique_ptr<Node> value) {
-        return make_unique<Optarg>(tokLoc(name).join(value->loc), gs_.enterNameUTF8(name->string()), tokLoc(name),
+        core::LocOffsets loc = tokLoc(name);
+        checkReservedForNumberedParameters(name->string(), loc);
+
+        return make_unique<Optarg>(loc.join(value->loc), gs_.enterNameUTF8(name->string()), tokLoc(name),
                                    std::move(value));
     }
 
@@ -1207,10 +1243,12 @@ public:
             nameLoc = tokLoc(name);
             loc = loc.join(nameLoc);
             nm = gs_.enterNameUTF8(name->string());
+            checkReservedForNumberedParameters(name->string(), nameLoc);
         } else {
             // case like 'def m(*); end'
             nm = gs_.freshNameUnique(core::UniqueNameKind::Parser, core::Names::star(), ++uniqueCounter_);
         }
+
         return make_unique<Restarg>(loc, nm, nameLoc);
     }
 
@@ -1219,7 +1257,10 @@ public:
     }
 
     unique_ptr<Node> shadowarg(const token *name) {
-        return make_unique<Shadowarg>(tokLoc(name), gs_.enterNameUTF8(name->string()));
+        core::LocOffsets loc = tokLoc(name);
+        checkReservedForNumberedParameters(name->string(), loc);
+
+        return make_unique<Shadowarg>(loc, gs_.enterNameUTF8(name->string()));
     }
 
     unique_ptr<Node> splat(const token *star, unique_ptr<Node> arg) {
@@ -1532,6 +1573,12 @@ public:
                parser::isa_node<Hash>(&node);
     }
 
+    void checkReservedForNumberedParameters(std::string name, core::LocOffsets loc) {
+        if (isNumberedParameterName(name)) {
+            error(ruby_parser::dclass::ReservedForNumparam, loc, name);
+        }
+    }
+
     bool isNumberedParameterName(std::string_view name) {
         return name.length() == 2 && name[0] == '_' && name[1] >= '1' && name[1] <= '9';
     }
@@ -1797,9 +1844,9 @@ ForeignPtr for_(SelfPtr builder, const token *for_, ForeignPtr iterator, const t
                                         build->cast_node(body), end));
 }
 
-ForeignPtr forward_args(SelfPtr builder, const token *begin, const token *dots, const token *end) {
+ForeignPtr forward_arg(SelfPtr builder, const token *begin, const token *dots, const token *end) {
     auto build = cast_builder(builder);
-    return build->toForeign(build->forward_args(begin, dots, end));
+    return build->toForeign(build->forward_arg(begin, dots, end));
 }
 
 ForeignPtr forwarded_args(SelfPtr builder, const token *dots) {
@@ -1825,11 +1872,6 @@ ForeignPtr if_guard(SelfPtr builder, const token *tok, ForeignPtr ifBody) {
 ForeignPtr ident(SelfPtr builder, const token *tok) {
     auto build = cast_builder(builder);
     return build->toForeign(build->ident(tok));
-}
-
-ForeignPtr in_match(SelfPtr builder, ForeignPtr lhs, const token *tok, ForeignPtr rhs) {
-    auto build = cast_builder(builder);
-    return build->toForeign(build->in_match(build->cast_node(lhs), tok, build->cast_node(rhs)));
 }
 
 ForeignPtr in_pattern(SelfPtr builder, const token *tok, ForeignPtr pattern, ForeignPtr guard, const token *thenToken,
@@ -1987,6 +2029,16 @@ ForeignPtr match_as(SelfPtr builder, ForeignPtr value, const token *assoc, Forei
 ForeignPtr match_label(SelfPtr builder, ForeignPtr label) {
     auto build = cast_builder(builder);
     return build->toForeign(build->match_label(build->cast_node(label)));
+}
+
+ForeignPtr match_pattern(SelfPtr builder, ForeignPtr lhs, const token *tok, ForeignPtr rhs) {
+    auto build = cast_builder(builder);
+    return build->toForeign(build->match_pattern(build->cast_node(lhs), tok, build->cast_node(rhs)));
+}
+
+ForeignPtr match_pattern_p(SelfPtr builder, ForeignPtr lhs, const token *tok, ForeignPtr rhs) {
+    auto build = cast_builder(builder);
+    return build->toForeign(build->match_pattern_p(build->cast_node(lhs), tok, build->cast_node(rhs)));
 }
 
 ForeignPtr match_nil_pattern(SelfPtr builder, const token *dstar, const token *nil) {
@@ -2312,13 +2364,12 @@ struct ruby_parser::builder Builder::interface = {
     float_,
     floatComplex,
     for_,
-    forward_args,
+    forward_arg,
     forwarded_args,
     gvar,
     hash_pattern,
     ident,
     if_guard,
-    in_match,
     in_pattern,
     index,
     indexAsgn,
@@ -2348,6 +2399,8 @@ struct ruby_parser::builder Builder::interface = {
     match_alt,
     match_as,
     match_label,
+    match_pattern,
+    match_pattern_p,
     match_nil_pattern,
     match_op,
     match_pair,

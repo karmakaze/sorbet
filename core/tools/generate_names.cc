@@ -99,6 +99,7 @@ NameDef names[] = {
     {"override_", "override"},
     {"overridable"},
     {"allowIncompatible", "allow_incompatible"},
+    {"sigForMethod"},
 
     // Sig builders
     {"bind"},
@@ -180,6 +181,7 @@ NameDef names[] = {
     {"encryptedProp", "encrypted_prop"},
     {"array"},
     {"defDelegator", "def_delegator"},
+    {"defDelegators", "def_delegators"},
     {"delegate"},
     {"type"},
     {"optional"},
@@ -327,6 +329,10 @@ NameDef names[] = {
     {"buildHash", "<build-hash>"},
     {"buildArray", "<build-array>"},
     {"buildRange", "<build-range>"},
+    {"mergeHash", "<merge-hash>"},
+    {"mergeHashValues", "<merge-hash-values>"},
+    {"toHashDup", "<to-hash-dup>"},
+    {"toHashNoDup", "<to-hash-nodup>"},
     {"splat", "<splat>"},
     {"expandSplat", "<expand-splat>"},
     {"suggestType", "<suggest-type>"},
@@ -380,6 +386,8 @@ NameDef names[] = {
     // Pattern matching
     {"patternMatch", "<pattern-match>"},
 
+    {"regexBackref", "<regex-backref>"},
+
     {"staticInit", "<static-init>"},
 
     {"require"},
@@ -396,7 +404,6 @@ NameDef names[] = {
     {"export_", "export"},
     {"PackageSpec", "PackageSpec", true},
     {"PackageRegistry", "<PackageRegistry>", true},
-    {"exportMethods", "export_methods"},
     {"PackageMethods", "<PackageMethods>", true},
 
     // GlobalState initEmpty()
@@ -463,6 +470,7 @@ NameDef names[] = {
     {"Subclasses", "SUBCLASSES", true},
     {"Sorbet", "Sorbet", true},
     {"ReturnTypeInference", "ReturnTypeInference", true},
+    {"ResolvedSig", "ResolvedSig", true},
     {"InferredReturnType", "INFERRED_RETURN_TYPE", true},
     {"InferredArgumentType", "INFERRED_ARGUMENT_TYPE", true},
     {"ImplicitModuleSuperclass", "ImplicitModuleSuperclass", true},

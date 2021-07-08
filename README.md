@@ -366,7 +366,14 @@ bazel test //test:test_PosTests/testdata/path/to/<name>
 ```
 
 Files that begin with a prefix and `__` will be run together. For example,
-`foo__1.rb` and `foo__2.rb` will be run together as test `foo`.
+`foo__1.rb` and `foo__2.rb` will be run together as test `foo`. If such sets of
+files have `*.exp` files associated with them, the `*.exp` files must instead
+follow the pattern `<name>.<phase>.exp`, where `<name>` does not include the
+`__*.rb` suffix. So `foo__1.rb` and `foo__2.rb` would have an exp file like
+`foo.<pass>.exp`.
+
+Another exception: for `package-tree` exp tests, the filename is always
+`pass.package-tree.exp`, no matter the name of the test.
 
 ### CLI tests
 
@@ -929,7 +936,7 @@ You are encouraged to play around with various clang-based tools which use the
 
     After successfully compiling Sorbet, point your editor to use the
     `clangd` executable located in
-    `bazel-sorbet/external/llvm_toolchain/bin/clangd`.
+    `bazel-sorbet/external/llvm_toolchain_12_0_0/bin/clangd`.
 
 -   [clang-format] -- Clang-based source code formatter
 

@@ -8,18 +8,6 @@ module T::Utils
       val.aliased_type
     elsif val.is_a?(T::Types::Base)
       val
-    elsif val == ::Array
-      T::Array[T.untyped]
-    elsif val == ::Set
-      T::Set[T.untyped]
-    elsif val == ::Hash
-      T::Hash[T.untyped, T.untyped]
-    elsif val == ::Enumerable
-      T::Enumerable[T.untyped]
-    elsif val == ::Enumerator
-      T::Enumerator[T.untyped]
-    elsif val == ::Range
-      T::Range[T.untyped]
     elsif val.is_a?(Module)
       T::Types::Simple::Private::Pool.type_for_module(val)
     elsif val.is_a?(::Array)
@@ -91,10 +79,12 @@ module T::Utils
     case type
     when T::Types::Union
       non_nil_types = type.types.reject {|t| t == Nilable::NIL_TYPE}
-      if non_nil_types.length == 1
-        non_nil_types.first
+      return nil if type.types.length == non_nil_types.length
+      case non_nil_types.length
+      when 0 then nil
+      when 1 then non_nil_types.first
       else
-        nil
+        T::Types::Union::Private::Pool.union_of_types(non_nil_types[0], non_nil_types[1], non_nil_types[2..-1])
       end
     else
       nil
