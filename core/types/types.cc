@@ -286,9 +286,13 @@ TypePtr Types::rangeOf(const GlobalState &gs, const TypePtr &elem) {
     return make_type<AppliedType>(Symbols::Range(), move(targs));
 }
 
-TypePtr Types::hashOf(const GlobalState &gs, const TypePtr &elem) {
-    vector<TypePtr> tupleArgs{Types::Symbol(), elem};
-    vector<TypePtr> targs{Types::Symbol(), elem, make_type<TupleType>(move(tupleArgs))};
+TypePtr Types::hashOfSymbolKey(const GlobalState &gs, const TypePtr &elem) {
+    return hashOf(gs, Types::Symbol(), elem);
+}
+
+TypePtr Types::hashOf(const GlobalState &gs, const TypePtr &keyType, const TypePtr &elem) {
+    vector<TypePtr> tupleArgs{keyType, elem};
+    vector<TypePtr> targs{keyType, elem, make_type<TupleType>(move(tupleArgs))};
     return make_type<AppliedType>(Symbols::Hash(), move(targs));
 }
 
@@ -427,9 +431,12 @@ TypePtr ShapeType::underlying(const GlobalState &gs) const {
     } else {
         auto keysLub = lubAllDropLiteral(gs, this->keys);
         auto valuesLub = lubAllDropLiteral(gs, this->values);
-        vector<TypePtr> tupleArgs{keysLub, valuesLub};
-        vector<TypePtr> targs{keysLub, valuesLub, make_type<TupleType>(move(tupleArgs))};
-        return make_type<AppliedType>(Symbols::Hash(), targs);
+        auto vo = cast_type<OrType>(valuesLub);
+        if (vo != nullptr && !(vo->left.isNilClass() && isa_type<ClassType>(vo->right))
+                          && !(vo->right.isNilClass() && isa_type<ClassType>(vo->left))) {
+            valuesLub = Types::untypedUntracked();
+        }
+        return Types::hashOf(gs, keysLub, valuesLub);
     }
 }
 
